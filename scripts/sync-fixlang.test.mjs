@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { Readable } from "node:stream";
 
 import {
   compareStableVersions,
@@ -7,6 +8,7 @@ import {
   parseChecksumManifest,
   parseStableVersion,
   renderCask,
+  runCli,
   selectGreatestPublicRelease,
 } from "./sync-fixlang.mjs";
 
@@ -47,6 +49,7 @@ test("selectGreatestPublicRelease ignores draft, prerelease, and malformed tags"
     { tag_name: "v2.0.0-rc.1", draft: false, prerelease: false },
     { tag_name: "v3.0.0", draft: true, prerelease: false },
     { tag_name: "v4.0.0", draft: false, prerelease: true },
+    { tag_name: "v9.0.0", draft: "false", prerelease: false },
     { tag_name: "release-5.0.0", draft: false, prerelease: false },
     { tag_name: "v1.12.0", draft: false, prerelease: false },
   ]);
@@ -116,6 +119,22 @@ test("decideCaskSync rejects missing or malformed literal cask versions", () => 
   }
 });
 
+test("decideCaskSync allows the first verified release only with an explicit initial-create flag", () => {
+  assert.throws(
+    () => decideCaskSync({ release: { version: "1.2.3", digest: DIGEST }, existingCask: null }),
+    /literal cask version/i,
+  );
+
+  const decision = decideCaskSync({
+    release: { version: "1.2.3", digest: DIGEST },
+    existingCask: null,
+    allowInitialCreate: true,
+  });
+  assert.equal(decision.kind, "update");
+  assert.equal(decision.reason, "initial-release");
+  assert.equal(decision.cask, renderCask("1.2.3", DIGEST));
+});
+
 test("decideCaskSync permits only a greater validated release to render and commit", () => {
   const decision = decideCaskSync({
     release: { version: "1.2.4", digest: DIGEST },
@@ -171,4 +190,13 @@ test("renderCask refuses unsafe input and never emits forbidden behavior", () =>
   }
   assert.doesNotMatch(cask, /system\(|`|%x\{|\.system\(/);
   assert.match(cask, /xattr -dr com\.apple\.quarantine/);
+});
+
+test("runCli emits a workflow-useful decision through injected I/O", async () => {
+  const writes = [];
+  await runCli({
+    input: Readable.from([JSON.stringify({ action: "select-release", releases: [] })]),
+    output: { write(value) { writes.push(value); } },
+  });
+  assert.deepEqual(JSON.parse(writes.join("")), { kind: "no-valid-public-release" });
 });
