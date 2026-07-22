@@ -19,6 +19,7 @@ function stepBody(name, nextName) {
 const smoke = stepBody("Smoke-test the public consumer path", "Revert a cask update after a failed smoke test");
 const rollback = stepBody("Revert a cask update after a failed smoke test");
 const synchronize = stepBody("Select, validate, render, and test the cask", "Publish the verified cask commit");
+const checkout = stepBody("Check out tap without persisted credentials", "Select, validate, render, and test the cask");
 const selectionStart = workflow.indexOf('selection_kind="$(jq -er \'.kind\' "$TEMP_ROOT/selection.json")"');
 const selectionEnd = workflow.indexOf('readonly VERSION="$(jq -er \'.version\' "$TEMP_ROOT/selection.json")"');
 assert.notEqual(selectionStart, -1, "missing release selection result");
@@ -115,4 +116,13 @@ test("release discovery clears its token before selection and validation work", 
   assert.ok(cleared > normalized, "discovery token must be cleared after page normalization");
   assert.ok(selection > cleared, "selection must begin after clearing the discovery token");
   assert.doesNotMatch(synchronize.slice(cleared), /(?:\$\{?GH_TOKEN\}?|GH_TOKEN=)/);
+});
+
+test("checkout uses the exact supported immutable action runtime", () => {
+  assert.match(
+    checkout,
+    /uses: actions\/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7\.0\.1/,
+  );
+  assert.match(checkout, /ref: main/);
+  assert.match(checkout, /persist-credentials: false/);
 });
