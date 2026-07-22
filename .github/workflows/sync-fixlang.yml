@@ -60,6 +60,7 @@ jobs:
             "/repos/${FIXLANG_REPOSITORY}/releases?per_page=100" > "$TEMP_ROOT/release-pages.json"
           jq -e 'type == "array" and all(.[]; type == "array")' "$TEMP_ROOT/release-pages.json" >/dev/null
           jq 'if length == 0 then [] else add end' "$TEMP_ROOT/release-pages.json" > "$TEMP_ROOT/releases.json"
+          unset GH_TOKEN
           jq -n --slurpfile releases "$TEMP_ROOT/releases.json" \
             '{action: "select-release", releases: $releases[0]}' > "$TEMP_ROOT/select-request.json"
           node scripts/sync-fixlang.mjs < "$TEMP_ROOT/select-request.json" > "$TEMP_ROOT/selection.json"
