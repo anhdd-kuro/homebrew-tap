@@ -120,7 +120,18 @@ export function parseLiteralCaskVersion(cask) {
   } catch (error) {
     throw new Error(`Malformed literal cask version: ${error.message}`);
   }
-  return matches[0][1];
+
+  const digestMatches = [...cask.matchAll(/^\s*sha256\s+"([0-9a-f]{64})"\s*$/gm)];
+  if (digestMatches.length !== 1) {
+    throw new Error("Existing cask contract must contain one literal lowercase SHA-256 digest");
+  }
+
+  const version = matches[0][1];
+  const digest = digestMatches[0][1];
+  if (cask !== renderCask(version, digest)) {
+    throw new Error("Existing cask contract does not match the canonical FixLang cask");
+  }
+  return version;
 }
 
 /**
@@ -160,13 +171,14 @@ end
 }
 
 /**
- * Decide whether a previously validated release may modify the cask. A null
- * release always wins as a safe no-op before looking at the filesystem state.
+ * Decide whether a previously validated release may modify the cask. Existing
+ * cask content is validated before every decision, including no-release runs.
  *
  * @param {{release: null | {version: string, digest: string}, existingCask: string | null, allowInitialCreate?: boolean}} request
  * @returns {{kind: "no-op", reason: string, render: false, commit: false} | {kind: "update", reason: string, render: true, commit: true, cask: string}}
  */
 export function decideCaskSync({ release, existingCask, allowInitialCreate = false }) {
+  const existingVersion = existingCask === null ? null : parseLiteralCaskVersion(existingCask);
   if (release === null) {
     return { kind: "no-op", reason: "no-valid-public-release", render: false, commit: false };
   }
@@ -174,12 +186,15 @@ export function decideCaskSync({ release, existingCask, allowInitialCreate = fal
     throw new TypeError("Release must be null or a validated release object");
   }
 
+  if (existingVersion === null && !allowInitialCreate) {
+    throw new Error("Missing literal cask version");
+  }
+
   const cask = renderCask(release.version, release.digest);
-  if (existingCask === null && allowInitialCreate) {
+  if (existingVersion === null) {
     return { kind: "update", reason: "initial-release", render: true, commit: true, cask };
   }
 
-  const existingVersion = parseLiteralCaskVersion(existingCask);
   const comparison = compareStableVersions(release.version, existingVersion);
   if (comparison === 0) {
     return { kind: "no-op", reason: "already-current", render: false, commit: false };
