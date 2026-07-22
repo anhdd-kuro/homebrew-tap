@@ -79,6 +79,16 @@ jobs:
 
           selection_kind="$(jq -er '.kind' "$TEMP_ROOT/selection.json")"
           if [ "$selection_kind" = "no-valid-public-release" ]; then
+            if [ -f "$TAP_CASK" ]; then
+              jq -n --rawfile existing "$TAP_CASK" \
+                '{action: "decide-cask", release: null, existingCask: $existing}' > "$TEMP_ROOT/no-release-decision-request.json"
+            else
+              jq -n \
+                '{action: "decide-cask", release: null, existingCask: null}' > "$TEMP_ROOT/no-release-decision-request.json"
+            fi
+            node scripts/sync-fixlang.mjs < "$TEMP_ROOT/no-release-decision-request.json" > "$TEMP_ROOT/no-release-decision.json"
+            test "$(jq -er '.kind' "$TEMP_ROOT/no-release-decision.json")" = "no-op"
+            test "$(jq -er '.reason' "$TEMP_ROOT/no-release-decision.json")" = "no-valid-public-release"
             git diff --exit-code
             test -z "$(git status --porcelain)"
             echo "No valid public FixLang stable release: successful no-op."

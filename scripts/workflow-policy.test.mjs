@@ -18,10 +18,11 @@ function stepBody(name, nextName) {
 
 const smoke = stepBody("Smoke-test the public consumer path", "Revert a cask update after a failed smoke test");
 const rollback = stepBody("Revert a cask update after a failed smoke test");
-const selection = workflow.slice(
-  workflow.indexOf('selection_kind="$(jq -er \' .kind\' "$TEMP_ROOT/selection.json")"'.replace("' .kind'", "'.kind'")),
-  workflow.indexOf('readonly VERSION="$(jq -er \'.version\' "$TEMP_ROOT/selection.json")"'),
-);
+const selectionStart = workflow.indexOf('selection_kind="$(jq -er \'.kind\' "$TEMP_ROOT/selection.json")"');
+const selectionEnd = workflow.indexOf('readonly VERSION="$(jq -er \'.version\' "$TEMP_ROOT/selection.json")"');
+assert.notEqual(selectionStart, -1, "missing release selection result");
+assert.notEqual(selectionEnd, -1, "missing selected release version");
+const selection = workflow.slice(selectionStart, selectionEnd);
 
 test("smoke refuses pre-existing FixLang or tap state before mutating Homebrew", () => {
   const installedCheck = smoke.indexOf('brew list --cask fixlang >/dev/null 2>&1');
@@ -77,6 +78,7 @@ test("rollback retries only benign main races and refuses competing cask edits",
 test("no-release validates a tracked cask through decide-cask before no-op", () => {
   const noReleaseExit = selection.indexOf('if [ "$selection_kind" = "no-valid-public-release" ]; then');
   const decision = selection.indexOf('node scripts/sync-fixlang.mjs < "$TEMP_ROOT/no-release-decision-request.json"');
+  const successfulExit = selection.indexOf("exit 0", noReleaseExit);
 
   assert.ok(noReleaseExit >= 0, "missing no-release branch");
   assert.match(selection, /if \[ -f "\$TAP_CASK" \]; then/);
@@ -84,5 +86,6 @@ test("no-release validates a tracked cask through decide-cask before no-op", () 
   assert.match(selection, /release: null, existingCask: \$existing/);
   assert.match(selection, /existingCask: null/);
   assert.ok(decision > noReleaseExit, "no-release must invoke the tested decision helper before it exits");
+  assert.ok(decision < successfulExit, "no-release must validate a tracked cask before its successful exit");
   assert.match(selection, /no-release-decision\.json/);
 });
