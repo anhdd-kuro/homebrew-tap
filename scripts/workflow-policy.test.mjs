@@ -93,3 +93,15 @@ test("no-release validates a tracked cask through decide-cask before no-op", () 
 test("synchronization runs the full local workflow policy suite", () => {
   assert.match(workflow, /node --test scripts\/sync-fixlang\.test\.mjs scripts\/workflow-policy\.test\.mjs/);
 });
+
+test("release discovery uses the built-in GitHub token instead of anonymous API requests", () => {
+  const synchronize = stepBody("Select, validate, render, and test the cask", "Publish the verified cask commit");
+
+  assert.match(synchronize, /GH_TOKEN: \$\{\{ github\.token \}\}/);
+  assert.match(synchronize, /gh api --paginate --slurp/);
+  assert.match(synchronize, /Accept: application\/vnd\.github\+json/);
+  assert.match(synchronize, /X-GitHub-Api-Version: 2022-11-28/);
+  assert.match(synchronize, /jq -e 'type == "array" and all\(\.\[\]; type == "array"\)'/);
+  assert.match(synchronize, /jq 'add' .*releases\.json/);
+  assert.doesNotMatch(synchronize, /curl[\s\S]{0,240}api\.github\.com/);
+});
