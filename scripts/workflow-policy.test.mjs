@@ -18,6 +18,10 @@ function stepBody(name, nextName) {
 
 const smoke = stepBody("Smoke-test the public consumer path", "Revert a cask update after a failed smoke test");
 const rollback = stepBody("Revert a cask update after a failed smoke test");
+const selection = workflow.slice(
+  workflow.indexOf('selection_kind="$(jq -er \' .kind\' "$TEMP_ROOT/selection.json")"'.replace("' .kind'", "'.kind'")),
+  workflow.indexOf('readonly VERSION="$(jq -er \'.version\' "$TEMP_ROOT/selection.json")"'),
+);
 
 test("smoke refuses pre-existing FixLang or tap state before mutating Homebrew", () => {
   const installedCheck = smoke.indexOf('brew list --cask fixlang >/dev/null 2>&1');
@@ -68,4 +72,17 @@ test("rollback retries only benign main races and refuses competing cask edits",
   assert.match(rollback, /Competing cask edit detected; refusing to overwrite it/);
   assert.match(rollback, /Rollback exhausted after \$MAX_ROLLBACK_ATTEMPTS attempts/);
   assert.doesNotMatch(rollback, /push\b[^\n]*(?:--force|\s-f(?:\s|$))/);
+});
+
+test("no-release validates a tracked cask through decide-cask before no-op", () => {
+  const noReleaseExit = selection.indexOf('if [ "$selection_kind" = "no-valid-public-release" ]; then');
+  const decision = selection.indexOf('node scripts/sync-fixlang.mjs < "$TEMP_ROOT/no-release-decision-request.json"');
+
+  assert.ok(noReleaseExit >= 0, "missing no-release branch");
+  assert.match(selection, /if \[ -f "\$TAP_CASK" \]; then/);
+  assert.match(selection, /--rawfile existing "\$TAP_CASK"/);
+  assert.match(selection, /release: null, existingCask: \$existing/);
+  assert.match(selection, /existingCask: null/);
+  assert.ok(decision > noReleaseExit, "no-release must invoke the tested decision helper before it exits");
+  assert.match(selection, /no-release-decision\.json/);
 });
