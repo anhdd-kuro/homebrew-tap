@@ -1,0 +1,242 @@
+name: Synchronize FixLang cask
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+# Public release discovery needs only read access. The one job that can publish
+# the rendered cask narrows its token to this repository's contents.
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-fixlang-cask
+  cancel-in-progress: false
+
+jobs:
+  synchronize:
+    runs-on: macos-14
+    permissions:
+      contents: write
+    steps:
+      - name: Check out tap without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Select, validate, render, and test the cask
+        id: synchronize
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          readonly FIXLANG_REPOSITORY="anhdd-kuro/fix-lang"
+          readonly FIXLANG_MAIN="main"
+          readonly EXPECTED_BUNDLE_ID="com.fixlang.app"
+          readonly TAP_CASK="Casks/fixlang.rb"
+          readonly TEMP_ROOT="$(mktemp -d "${RUNNER_TEMP}/fixlang-tap.XXXXXXXX")"
+          readonly MOUNT_POINT="${TEMP_ROOT}/mounted-image"
+          mounted=0
+
+          cleanup() {
+            if [ "$mounted" -eq 1 ]; then
+              hdiutil detach "$MOUNT_POINT" -quiet || true
+            fi
+            rm -rf "$TEMP_ROOT"
+          }
+          trap cleanup EXIT
+
+          node --test scripts/sync-fixlang.test.mjs
+          git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
+          test "$(git rev-parse HEAD)" = "$(git rev-parse refs/remotes/origin/main)"
+
+          fetch_releases() {
+            : > "$TEMP_ROOT/release-pages.jsonl"
+            page=1
+            while [ "$page" -le 1000 ]; do
+              curl --fail --location --retry 3 --proto '=https' --tlsv1.2 \
+                "https://api.github.com/repos/${FIXLANG_REPOSITORY}/releases?per_page=100&page=${page}" \
+                -o "$TEMP_ROOT/releases-${page}.json"
+              jq -e 'type == "array"' "$TEMP_ROOT/releases-${page}.json" >/dev/null
+              jq -c '.' "$TEMP_ROOT/releases-${page}.json" >> "$TEMP_ROOT/release-pages.jsonl"
+              count="$(jq 'length' "$TEMP_ROOT/releases-${page}.json")"
+              if [ "$count" -lt 100 ]; then
+                jq -s 'add' "$TEMP_ROOT/release-pages.jsonl" > "$TEMP_ROOT/releases.json"
+                return 0
+              fi
+              page=$((page + 1))
+            done
+            echo "Refusing an unexpectedly large release listing" >&2
+            return 1
+          }
+
+          fetch_releases
+          jq -n --slurpfile releases "$TEMP_ROOT/releases.json" \
+            '{action: "select-release", releases: $releases[0]}' > "$TEMP_ROOT/select-request.json"
+          node scripts/sync-fixlang.mjs < "$TEMP_ROOT/select-request.json" > "$TEMP_ROOT/selection.json"
+
+          selection_kind="$(jq -er '.kind' "$TEMP_ROOT/selection.json")"
+          if [ "$selection_kind" = "no-valid-public-release" ]; then
+            git diff --exit-code
+            test -z "$(git status --porcelain)"
+            echo "No valid public FixLang stable release: successful no-op."
+            exit 0
+          fi
+          test "$selection_kind" = "selected-release"
+
+          readonly VERSION="$(jq -er '.version' "$TEMP_ROOT/selection.json")"
+          readonly TAG="v${VERSION}"
+          readonly DMG_NAME="FixLang-${VERSION}-arm64.dmg"
+          readonly DMG_PATH="${TEMP_ROOT}/${DMG_NAME}"
+          readonly CHECKSUM_PATH="${TEMP_ROOT}/SHA256SUMS.txt"
+
+          jq -e --arg dmg "$DMG_NAME" '
+            .release.tag_name == ("v" + .version)
+            and .release.draft == false
+            and .release.prerelease == false
+            and (.release.assets as $assets
+            | ([ $assets[] | select(.name == $dmg and (.size | type == "number") and .size > 0) ] | length == 1)
+            and ([ $assets[] | select(.name == "SHA256SUMS.txt" and (.size | type == "number") and .size > 0) ] | length == 1)
+            )
+          ' "$TEMP_ROOT/selection.json" >/dev/null
+
+          curl --fail --location --retry 3 --proto '=https' --tlsv1.2 \
+            "https://github.com/${FIXLANG_REPOSITORY}/releases/download/${TAG}/${DMG_NAME}" \
+            -o "$DMG_PATH"
+          curl --fail --location --retry 3 --proto '=https' --tlsv1.2 \
+            "https://github.com/${FIXLANG_REPOSITORY}/releases/download/${TAG}/SHA256SUMS.txt" \
+            -o "$CHECKSUM_PATH"
+          test -s "$DMG_PATH"
+          test -s "$CHECKSUM_PATH"
+
+          jq -n --rawfile manifest "$CHECKSUM_PATH" --arg basename "$DMG_NAME" \
+            '{action: "parse-checksum", manifest: $manifest, basename: $basename}' > "$TEMP_ROOT/checksum-request.json"
+          node scripts/sync-fixlang.mjs < "$TEMP_ROOT/checksum-request.json" > "$TEMP_ROOT/checksum.json"
+          readonly EXPECTED_DIGEST="$(jq -er '.digest' "$TEMP_ROOT/checksum.json")"
+          readonly ACTUAL_DIGEST="$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')"
+          test "$ACTUAL_DIGEST" = "$EXPECTED_DIGEST"
+
+          hdiutil verify "$DMG_PATH"
+          mkdir "$MOUNT_POINT"
+          hdiutil attach "$DMG_PATH" -nobrowse -readonly -mountpoint "$MOUNT_POINT" >/dev/null
+          mounted=1
+          readonly APP_PATH="${MOUNT_POINT}/FixLang.app"
+          readonly PLIST_PATH="${APP_PATH}/Contents/Info.plist"
+          test -d "$APP_PATH"
+          test -f "$PLIST_PATH"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST_PATH")" = "$VERSION"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PLIST_PATH")" = "$EXPECTED_BUNDLE_ID"
+          executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$PLIST_PATH")"
+          case "$executable" in
+            *[!A-Za-z0-9._-]* | '')
+              echo "Unsafe CFBundleExecutable value" >&2
+              exit 1
+              ;;
+          esac
+          test -f "${APP_PATH}/Contents/MacOS/${executable}"
+          lipo -archs "${APP_PATH}/Contents/MacOS/${executable}" | tr ' ' '\n' | grep -Fx arm64 >/dev/null
+
+          git clone --filter=blob:none --no-checkout "https://github.com/${FIXLANG_REPOSITORY}.git" "$TEMP_ROOT/fixlang"
+          git -C "$TEMP_ROOT/fixlang" fetch --no-tags origin "+refs/heads/${FIXLANG_MAIN}:refs/remotes/origin/${FIXLANG_MAIN}"
+          git -C "$TEMP_ROOT/fixlang" fetch --tags origin
+          readonly TAG_COMMIT="$(git -C "$TEMP_ROOT/fixlang" rev-parse "refs/tags/${TAG}^{commit}")"
+          git -C "$TEMP_ROOT/fixlang" merge-base --is-ancestor "$TAG_COMMIT" "origin/${FIXLANG_MAIN}"
+
+          if [ -f "$TAP_CASK" ]; then
+            jq -n --rawfile existing "$TAP_CASK" --arg version "$VERSION" --arg digest "$ACTUAL_DIGEST" \
+              '{action: "decide-cask", release: {version: $version, digest: $digest}, existingCask: $existing}' > "$TEMP_ROOT/decision-request.json"
+          else
+            jq -n --arg version "$VERSION" --arg digest "$ACTUAL_DIGEST" \
+              '{action: "decide-cask", release: {version: $version, digest: $digest}, existingCask: null, allowInitialCreate: true}' > "$TEMP_ROOT/decision-request.json"
+          fi
+          node scripts/sync-fixlang.mjs < "$TEMP_ROOT/decision-request.json" > "$TEMP_ROOT/decision.json"
+          decision_kind="$(jq -er '.kind' "$TEMP_ROOT/decision.json")"
+          if [ "$decision_kind" = "no-op" ]; then
+            echo "Cask synchronization no-op: $(jq -er '.reason' "$TEMP_ROOT/decision.json")"
+            git diff --exit-code
+            test -z "$(git status --porcelain)"
+            exit 0
+          fi
+          test "$decision_kind" = "update"
+
+          mkdir -p Casks
+          jq -er '.cask' "$TEMP_ROOT/decision.json" > "$TAP_CASK"
+          git add "$TAP_CASK"
+          test "$(git diff --cached --name-only)" = "$TAP_CASK"
+          git diff --cached --check
+          brew style --cask "$TAP_CASK"
+          brew audit --cask "$TAP_CASK"
+          brew fetch --cask "$TAP_CASK"
+          test "$(git diff --cached --name-only)" = "$TAP_CASK"
+          git diff --cached --check
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore(cask): update fixlang to ${VERSION}"
+          echo "committed=true" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the verified cask commit
+        id: publish
+        if: steps.synchronize.outputs.committed == 'true'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:main
+          echo "published=true" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke-test the public consumer path
+        id: smoke
+        if: steps.publish.outputs.published == 'true'
+        continue-on-error: true
+        shell: bash
+        env:
+          VERSION: ${{ steps.synchronize.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          readonly TEMP_ROOT="$(mktemp -d "${RUNNER_TEMP}/fixlang-tap-smoke.XXXXXXXX")"
+          readonly APP_DIR="${TEMP_ROOT}/test-appdir"
+          cleanup() {
+            brew uninstall --cask fixlang >/dev/null 2>&1 || true
+            rm -rf "$TEMP_ROOT"
+          }
+          trap cleanup EXIT
+
+          smoke_test() {
+            brew untap anhdd-kuro/tap >/dev/null 2>&1 || true
+            brew tap anhdd-kuro/tap https://github.com/anhdd-kuro/homebrew-tap || return 1
+            mkdir "$APP_DIR" || return 1
+            brew install --cask anhdd-kuro/tap/fixlang --appdir "$APP_DIR" || return 1
+            test -d "$APP_DIR/FixLang.app" || return 1
+            test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_DIR/FixLang.app/Contents/Info.plist")" = "$VERSION" || return 1
+            brew uninstall --cask fixlang || return 1
+            test ! -e "$APP_DIR/FixLang.app" || return 1
+          }
+
+          smoke_test
+
+      - name: Revert a cask update after a failed smoke test
+        if: steps.smoke.outcome == 'failure'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          readonly TEMP_ROOT="$(mktemp -d "${RUNNER_TEMP}/fixlang-tap-revert.XXXXXXXX")"
+          readonly PUBLISH_COMMIT="$(git rev-parse HEAD)"
+          trap 'rm -rf "$TEMP_ROOT"' EXIT
+
+          git clone "https://github.com/${GITHUB_REPOSITORY}.git" "$TEMP_ROOT/recovery"
+          git -C "$TEMP_ROOT/recovery" config user.name "github-actions[bot]"
+          git -C "$TEMP_ROOT/recovery" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$TEMP_ROOT/recovery" merge-base --is-ancestor "$PUBLISH_COMMIT" HEAD
+          git -C "$TEMP_ROOT/recovery" revert --no-edit "$PUBLISH_COMMIT"
+          git -C "$TEMP_ROOT/recovery" push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:main
+          echo "The public cask smoke test failed; the cask update was reverted." >&2
+          exit 1
