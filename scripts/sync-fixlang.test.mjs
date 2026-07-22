@@ -6,6 +6,7 @@ import {
   compareStableVersions,
   decideCaskSync,
   parseChecksumManifest,
+  parseLiteralCaskVersion,
   parseStableVersion,
   renderCask,
   runCli,
@@ -145,6 +146,47 @@ test("decideCaskSync permits only a greater validated release to render and comm
   assert.equal(decision.render, true);
   assert.equal(decision.commit, true);
   assert.equal(decision.cask, renderCask("1.2.4", DIGEST));
+});
+
+test("decideCaskSync rejects a foreign cask even when it has a valid version", () => {
+  const foreignCask = renderCask("1.2.3", DIGEST).replace('cask "fixlang"', 'cask "other"');
+  assert.throws(
+    () => decideCaskSync({ release: { version: "1.2.4", digest: DIGEST }, existingCask: foreignCask }),
+    /existing cask contract/i,
+  );
+});
+
+test("decideCaskSync rejects arbitrary text containing a valid version line", () => {
+  const malformedCask = 'this is not Ruby\nversion "1.2.3"\nnot a FixLang cask\n';
+  assert.throws(
+    () => decideCaskSync({ release: { version: "1.2.4", digest: DIGEST }, existingCask: malformedCask }),
+    /existing cask contract/i,
+  );
+});
+
+test("a malformed existing cask hard-fails even when there is no release", () => {
+  const malformedCask = 'version "1.2.3"\n';
+  assert.throws(
+    () => decideCaskSync({ release: null, existingCask: malformedCask }),
+    /existing cask contract/i,
+  );
+});
+
+test("a canonical FixLang cask parses and preserves equal, lower, and newer decisions", () => {
+  const existingCask = renderCask("2.0.0", DIGEST);
+  assert.equal(parseLiteralCaskVersion(existingCask), "2.0.0");
+  assert.equal(
+    decideCaskSync({ release: { version: "2.0.0", digest: DIGEST }, existingCask }).reason,
+    "already-current",
+  );
+  assert.equal(
+    decideCaskSync({ release: { version: "1.9.9", digest: DIGEST }, existingCask }).reason,
+    "refused-downgrade",
+  );
+  assert.equal(
+    decideCaskSync({ release: { version: "2.0.1", digest: DIGEST }, existingCask }).reason,
+    "newer-release",
+  );
 });
 
 test("parseChecksumManifest accepts exactly one valid lowercase checksum for the exact DMG basename", () => {
