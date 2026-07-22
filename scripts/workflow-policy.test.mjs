@@ -102,6 +102,6 @@ test("release discovery uses the built-in GitHub token instead of anonymous API 
   assert.match(synchronize, /Accept: application\/vnd\.github\+json/);
   assert.match(synchronize, /X-GitHub-Api-Version: 2022-11-28/);
   assert.match(synchronize, /jq -e 'type == "array" and all\(\.\[\]; type == "array"\)'/);
-  assert.match(synchronize, /jq 'add' .*releases\.json/);
+  assert.match(synchronize, /jq 'if length == 0 then \[\] else add end'/);
   assert.doesNotMatch(synchronize, /curl[\s\S]{0,240}api\.github\.com/);
 });
