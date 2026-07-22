@@ -29,6 +29,8 @@ jobs:
       - name: Select, validate, render, and test the cask
         id: synchronize
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
@@ -52,27 +54,12 @@ jobs:
           git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
           test "$(git rev-parse HEAD)" = "$(git rev-parse refs/remotes/origin/main)"
 
-          fetch_releases() {
-            : > "$TEMP_ROOT/release-pages.jsonl"
-            page=1
-            while [ "$page" -le 1000 ]; do
-              curl --fail --location --retry 3 --proto '=https' --tlsv1.2 \
-                "https://api.github.com/repos/${FIXLANG_REPOSITORY}/releases?per_page=100&page=${page}" \
-                -o "$TEMP_ROOT/releases-${page}.json"
-              jq -e 'type == "array"' "$TEMP_ROOT/releases-${page}.json" >/dev/null
-              jq -c '.' "$TEMP_ROOT/releases-${page}.json" >> "$TEMP_ROOT/release-pages.jsonl"
-              count="$(jq 'length' "$TEMP_ROOT/releases-${page}.json")"
-              if [ "$count" -lt 100 ]; then
-                jq -s 'add' "$TEMP_ROOT/release-pages.jsonl" > "$TEMP_ROOT/releases.json"
-                return 0
-              fi
-              page=$((page + 1))
-            done
-            echo "Refusing an unexpectedly large release listing" >&2
-            return 1
-          }
-
-          fetch_releases
+          gh api --paginate --slurp \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "/repos/${FIXLANG_REPOSITORY}/releases?per_page=100" > "$TEMP_ROOT/release-pages.json"
+          jq -e 'type == "array" and all(.[]; type == "array")' "$TEMP_ROOT/release-pages.json" >/dev/null
+          jq 'if length == 0 then [] else add end' "$TEMP_ROOT/release-pages.json" > "$TEMP_ROOT/releases.json"
           jq -n --slurpfile releases "$TEMP_ROOT/releases.json" \
             '{action: "select-release", releases: $releases[0]}' > "$TEMP_ROOT/select-request.json"
           node scripts/sync-fixlang.mjs < "$TEMP_ROOT/select-request.json" > "$TEMP_ROOT/selection.json"
