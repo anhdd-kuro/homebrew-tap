@@ -18,6 +18,7 @@ function stepBody(name, nextName) {
 
 const smoke = stepBody("Smoke-test the public consumer path", "Revert a cask update after a failed smoke test");
 const rollback = stepBody("Revert a cask update after a failed smoke test");
+const synchronize = stepBody("Select, validate, render, and test the cask", "Publish the verified cask commit");
 const selectionStart = workflow.indexOf('selection_kind="$(jq -er \'.kind\' "$TEMP_ROOT/selection.json")"');
 const selectionEnd = workflow.indexOf('readonly VERSION="$(jq -er \'.version\' "$TEMP_ROOT/selection.json")"');
 assert.notEqual(selectionStart, -1, "missing release selection result");
@@ -95,8 +96,6 @@ test("synchronization runs the full local workflow policy suite", () => {
 });
 
 test("release discovery uses the built-in GitHub token instead of anonymous API requests", () => {
-  const synchronize = stepBody("Select, validate, render, and test the cask", "Publish the verified cask commit");
-
   assert.match(synchronize, /GH_TOKEN: \$\{\{ github\.token \}\}/);
   assert.match(synchronize, /gh api --paginate --slurp/);
   assert.match(synchronize, /Accept: application\/vnd\.github\+json/);
@@ -104,4 +103,16 @@ test("release discovery uses the built-in GitHub token instead of anonymous API 
   assert.match(synchronize, /jq -e 'type == "array" and all\(\.\[\]; type == "array"\)'/);
   assert.match(synchronize, /jq 'if length == 0 then \[\] else add end'/);
   assert.doesNotMatch(synchronize, /curl[\s\S]{0,240}api\.github\.com/);
+});
+
+test("release discovery clears its token before selection and validation work", () => {
+  const discovery = synchronize.indexOf('gh api --paginate --slurp');
+  const normalized = synchronize.indexOf("jq 'if length == 0 then [] else add end'");
+  const cleared = synchronize.indexOf("unset GH_TOKEN");
+  const selection = synchronize.indexOf('node scripts/sync-fixlang.mjs < "$TEMP_ROOT/select-request.json"');
+
+  assert.ok(discovery >= 0 && normalized > discovery, "release pages must be normalized after discovery");
+  assert.ok(cleared > normalized, "discovery token must be cleared after page normalization");
+  assert.ok(selection > cleared, "selection must begin after clearing the discovery token");
+  assert.doesNotMatch(synchronize.slice(cleared), /(?:\$\{?GH_TOKEN\}?|GH_TOKEN=)/);
 });
