@@ -48,7 +48,7 @@ jobs:
           }
           trap cleanup EXIT
 
-          node --test scripts/sync-fixlang.test.mjs
+          node --test scripts/sync-fixlang.test.mjs scripts/workflow-policy.test.mjs
           git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
           test "$(git rev-parse HEAD)" = "$(git rev-parse refs/remotes/origin/main)"
 
