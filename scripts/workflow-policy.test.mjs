@@ -89,3 +89,7 @@ test("no-release validates a tracked cask through decide-cask before no-op", () 
   assert.ok(decision < successfulExit, "no-release must validate a tracked cask before its successful exit");
   assert.match(selection, /no-release-decision\.json/);
 });
+
+test("synchronization runs the full local workflow policy suite", () => {
+  assert.match(workflow, /node --test scripts\/sync-fixlang\.test\.mjs scripts\/workflow-policy\.test\.mjs/);
+});
