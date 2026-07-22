@@ -120,7 +120,7 @@ jobs:
 
           hdiutil verify "$DMG_PATH"
           mkdir "$MOUNT_POINT"
-          hdiutil attach "$DMG_PATH" -nobrowse -readonly -mountpoint "$MOUNT_POINT" >/dev/null
+          hdiutil attach "$DMG_PATH" -readonly -nobrowse -noverify -mountpoint "$MOUNT_POINT" >/dev/null
           mounted=1
           readonly APP_PATH="${MOUNT_POINT}/FixLang.app"
           readonly PLIST_PATH="${APP_PATH}/Contents/Info.plist"
@@ -201,21 +201,51 @@ jobs:
 
           readonly TEMP_ROOT="$(mktemp -d "${RUNNER_TEMP}/fixlang-tap-smoke.XXXXXXXX")"
           readonly APP_DIR="${TEMP_ROOT}/test-appdir"
+          installed_by_smoke=0
+          tap_added_by_smoke=0
           cleanup() {
-            brew uninstall --cask fixlang >/dev/null 2>&1 || true
+            if [ "$installed_by_smoke" -eq 1 ]; then
+              brew uninstall --cask fixlang >/dev/null 2>&1 || true
+            fi
+            if [ "$tap_added_by_smoke" -eq 1 ]; then
+              brew untap anhdd-kuro/tap >/dev/null 2>&1 || true
+            fi
             rm -rf "$TEMP_ROOT"
           }
           trap cleanup EXIT
 
           smoke_test() {
-            brew untap anhdd-kuro/tap >/dev/null 2>&1 || true
-            brew tap anhdd-kuro/tap https://github.com/anhdd-kuro/homebrew-tap || return 1
+            if brew list --cask fixlang >/dev/null 2>&1; then
+              echo "Refusing smoke test: FixLang is already installed" >&2
+              return 1
+            fi
+            if brew tap | grep -Fx "anhdd-kuro/tap" >/dev/null; then
+              echo "Refusing smoke test: anhdd-kuro/tap is already tapped" >&2
+              return 1
+            fi
+
             mkdir "$APP_DIR" || return 1
-            brew install --cask anhdd-kuro/tap/fixlang --appdir "$APP_DIR" || return 1
-            test -d "$APP_DIR/FixLang.app" || return 1
-            test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_DIR/FixLang.app/Contents/Info.plist")" = "$VERSION" || return 1
+            readonly TEMP_ROOT_REAL="$(realpath "$TEMP_ROOT")"
+            readonly APP_DIR_REAL="$(realpath "$APP_DIR")"
+            case "$APP_DIR_REAL" in
+              "$TEMP_ROOT_REAL"/*)
+                ;;
+              *)
+                echo "Refusing smoke test: app directory escaped its temporary root" >&2
+                return 1
+                ;;
+            esac
+            echo "Smoke-test appdir: $APP_DIR_REAL"
+
+            tap_added_by_smoke=1
+            brew tap anhdd-kuro/tap https://github.com/anhdd-kuro/homebrew-tap || return 1
+            installed_by_smoke=1
+            brew install --cask anhdd-kuro/tap/fixlang --appdir "$APP_DIR_REAL" || return 1
+            test -d "$APP_DIR_REAL/FixLang.app" || return 1
+            test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_DIR_REAL/FixLang.app/Contents/Info.plist")" = "$VERSION" || return 1
             brew uninstall --cask fixlang || return 1
-            test ! -e "$APP_DIR/FixLang.app" || return 1
+            installed_by_smoke=0
+            test ! -e "$APP_DIR_REAL/FixLang.app" || return 1
           }
 
           smoke_test
@@ -230,13 +260,52 @@ jobs:
 
           readonly TEMP_ROOT="$(mktemp -d "${RUNNER_TEMP}/fixlang-tap-revert.XXXXXXXX")"
           readonly PUBLISH_COMMIT="$(git rev-parse HEAD)"
+          readonly MAX_ROLLBACK_ATTEMPTS=3
           trap 'rm -rf "$TEMP_ROOT"' EXIT
 
-          git clone "https://github.com/${GITHUB_REPOSITORY}.git" "$TEMP_ROOT/recovery"
-          git -C "$TEMP_ROOT/recovery" config user.name "github-actions[bot]"
-          git -C "$TEMP_ROOT/recovery" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git -C "$TEMP_ROOT/recovery" merge-base --is-ancestor "$PUBLISH_COMMIT" HEAD
-          git -C "$TEMP_ROOT/recovery" revert --no-edit "$PUBLISH_COMMIT"
-          git -C "$TEMP_ROOT/recovery" push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:main
-          echo "The public cask smoke test failed; the cask update was reverted." >&2
+          attempt=1
+          while [ "$attempt" -le "$MAX_ROLLBACK_ATTEMPTS" ]; do
+            recovery_directory="${TEMP_ROOT}/recovery-${attempt}"
+            git clone "https://github.com/${GITHUB_REPOSITORY}.git" "$recovery_directory"
+            git -C "$recovery_directory" config user.name "github-actions[bot]"
+            git -C "$recovery_directory" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git -C "$recovery_directory" fetch origin "+refs/heads/main:refs/remotes/origin/main"
+            git -C "$recovery_directory" checkout --detach origin/main
+            REMOTE_HEAD="$(git -C "$recovery_directory" rev-parse HEAD)"
+            if ! git -C "$recovery_directory" merge-base --is-ancestor "$PUBLISH_COMMIT" "$REMOTE_HEAD"; then
+              echo "Published cask commit is no longer an ancestor of main; refusing rollback" >&2
+              exit 1
+            fi
+            if ! git -C "$recovery_directory" diff --quiet "$PUBLISH_COMMIT" "$REMOTE_HEAD" -- Casks/fixlang.rb; then
+              echo "Competing cask edit detected; refusing to overwrite it" >&2
+              exit 1
+            fi
+            if ! git -C "$recovery_directory" revert --no-edit "$PUBLISH_COMMIT"; then
+              echo "Rollback conflict; refusing to overwrite a competing cask edit" >&2
+              exit 1
+            fi
+            if git -C "$recovery_directory" push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:main; then
+              echo "The public cask smoke test failed; the cask update was reverted." >&2
+              exit 1
+            fi
+
+            git -C "$recovery_directory" fetch origin "+refs/heads/main:refs/remotes/origin/main"
+            LATEST_REMOTE_HEAD="$(git -C "$recovery_directory" rev-parse origin/main)"
+            if [ "$LATEST_REMOTE_HEAD" = "$REMOTE_HEAD" ]; then
+              echo "Rollback push failed without a benign main race" >&2
+              exit 1
+            fi
+            if ! git -C "$recovery_directory" merge-base --is-ancestor "$PUBLISH_COMMIT" "$LATEST_REMOTE_HEAD"; then
+              echo "Published cask commit is no longer an ancestor after rollback race" >&2
+              exit 1
+            fi
+            if ! git -C "$recovery_directory" diff --quiet "$PUBLISH_COMMIT" "$LATEST_REMOTE_HEAD" -- Casks/fixlang.rb; then
+              echo "Competing cask edit detected after rollback race; refusing to overwrite it" >&2
+              exit 1
+            fi
+            echo "Retrying rollback after a benign non-cask main race" >&2
+            attempt=$((attempt + 1))
+          done
+
+          echo "Rollback exhausted after $MAX_ROLLBACK_ATTEMPTS attempts" >&2
           exit 1

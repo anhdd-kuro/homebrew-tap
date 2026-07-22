@@ -23,7 +23,7 @@ test("smoke refuses pre-existing FixLang or tap state before mutating Homebrew",
   const installedCheck = smoke.indexOf('brew list --cask fixlang >/dev/null 2>&1');
   const tapCheck = smoke.indexOf('brew tap | grep -Fx "anhdd-kuro/tap" >/dev/null');
   const firstMutation = Math.min(
-    ...["brew uninstall --cask fixlang", "brew untap anhdd-kuro/tap", "brew tap anhdd-kuro/tap", "brew install --cask anhdd-kuro/tap/fixlang"]
+    ...["tap_added_by_smoke=1", "installed_by_smoke=1", "brew tap anhdd-kuro/tap", "brew install --cask anhdd-kuro/tap/fixlang"]
       .map((needle) => smoke.indexOf(needle))
       .filter((index) => index >= 0),
   );
@@ -35,12 +35,13 @@ test("smoke refuses pre-existing FixLang or tap state before mutating Homebrew",
 });
 
 test("smoke cleanup touches only state owned by this run", () => {
+  const cleanup = smoke.slice(smoke.indexOf("cleanup() {"), smoke.indexOf("trap cleanup EXIT"));
   assert.match(smoke, /installed_by_smoke=0/);
   assert.match(smoke, /tap_added_by_smoke=0/);
-  assert.match(smoke, /if \[ "\$installed_by_smoke" -eq 1 \]; then\n\s+brew uninstall --cask fixlang/);
-  assert.match(smoke, /if \[ "\$tap_added_by_smoke" -eq 1 \]; then\n\s+brew untap anhdd-kuro\/tap/);
-  assert.doesNotMatch(smoke, /^\s*brew uninstall --cask fixlang[^\n]*$/m);
-  assert.doesNotMatch(smoke, /^\s*brew untap anhdd-kuro\/tap[^\n]*$/m);
+  assert.match(cleanup, /if \[ "\$installed_by_smoke" -eq 1 \]; then\n\s+brew uninstall --cask fixlang/);
+  assert.match(cleanup, /if \[ "\$tap_added_by_smoke" -eq 1 \]; then\n\s+brew untap anhdd-kuro\/tap/);
+  assert.doesNotMatch(cleanup, /cleanup\(\) \{\s*brew uninstall --cask fixlang/);
+  assert.doesNotMatch(cleanup, /cleanup\(\) \{\s*brew untap anhdd-kuro\/tap/);
 });
 
 test("smoke logs a resolved app directory constrained to its unique temporary root", () => {
@@ -66,5 +67,5 @@ test("rollback retries only benign main races and refuses competing cask edits",
   assert.match(rollback, /diff --quiet "\$PUBLISH_COMMIT" "\$REMOTE_HEAD" -- Casks\/fixlang\.rb/);
   assert.match(rollback, /Competing cask edit detected; refusing to overwrite it/);
   assert.match(rollback, /Rollback exhausted after \$MAX_ROLLBACK_ATTEMPTS attempts/);
-  assert.doesNotMatch(rollback, /push[^\n]*--force/);
+  assert.doesNotMatch(rollback, /push\b[^\n]*(?:--force|\s-f(?:\s|$))/);
 });
