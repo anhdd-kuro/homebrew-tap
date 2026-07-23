@@ -213,7 +213,7 @@ test("renderCask emits the fixed safe arm64 cask contract", () => {
   const cask = renderCask("1.2.3", DIGEST);
   assert.equal(
     cask,
-    `cask "fixlang" do\n  version "1.2.3"\n  sha256 "${DIGEST}"\n\n  url "https://github.com/anhdd-kuro/fix-lang/releases/download/v1.2.3/FixLang-1.2.3-arm64.dmg"\n  name "FixLang"\n  desc "AI-powered writing correction for selected text"\n  homepage "https://github.com/anhdd-kuro/fix-lang"\n\n  depends_on arch: :arm64\n  app "FixLang.app"\n\n  caveats do\n    unsigned_accessibility\n    <<~EOS\n      FixLang is currently unsigned. If macOS blocks an app you downloaded\n      from this trusted release, run:\n\n        xattr -dr com.apple.quarantine "/Applications/FixLang.app"\n    EOS\n  end\nend\n`,
+    `cask "fixlang" do\n  version "1.2.3"\n  sha256 "${DIGEST}"\n\n  url "https://github.com/anhdd-kuro/fix-lang/releases/download/v#{version}/FixLang-#{version}-arm64.dmg"\n  name "FixLang"\n  desc "AI-powered writing correction for selected text"\n  homepage "https://github.com/anhdd-kuro/fix-lang"\n\n  depends_on arch: :arm64\n  depends_on :macos\n\n  app "FixLang.app"\n\n  caveats do\n    unsigned_accessibility\n    <<~EOS\n      FixLang is currently unsigned. If macOS blocks an app you downloaded\n      from this trusted release, run:\n\n        xattr -dr com.apple.quarantine "/Applications/FixLang.app"\n    EOS\n  end\nend\n`,
   );
 });
 

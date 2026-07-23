@@ -164,9 +164,13 @@ jobs:
           git add "$TAP_CASK"
           test "$(git diff --cached --name-only)" = "$TAP_CASK"
           git diff --cached --check
-          brew style --cask "$TAP_CASK"
-          brew audit --cask "$TAP_CASK"
-          brew fetch --cask "$TAP_CASK"
+          readonly HOMEBREW_TAP_LINK="$(brew --repository)/Library/Taps/anhdd-kuro/homebrew-tap"
+          mkdir -p "$(dirname "$HOMEBREW_TAP_LINK")"
+          ln -sfn "$GITHUB_WORKSPACE" "$HOMEBREW_TAP_LINK"
+          brew style --cask anhdd-kuro/tap/fixlang
+          brew audit --cask anhdd-kuro/tap/fixlang
+          brew fetch --cask anhdd-kuro/tap/fixlang
+          rm -f "$HOMEBREW_TAP_LINK"
           test "$(git diff --cached --name-only)" = "$TAP_CASK"
           git diff --cached --check
 

@@ -149,12 +149,14 @@ export function renderCask(version, digest) {
   version "${version}"
   sha256 "${digest}"
 
-  url "https://github.com/anhdd-kuro/fix-lang/releases/download/v${version}/FixLang-${version}-arm64.dmg"
+  url "https://github.com/anhdd-kuro/fix-lang/releases/download/v#{version}/FixLang-#{version}-arm64.dmg"
   name "FixLang"
   desc "AI-powered writing correction for selected text"
   homepage "https://github.com/anhdd-kuro/fix-lang"
 
   depends_on arch: :arm64
+  depends_on :macos
+
   app "FixLang.app"
 
   caveats do
