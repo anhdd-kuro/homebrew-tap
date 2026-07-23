@@ -160,7 +160,7 @@ jobs:
           test "$decision_kind" = "update"
 
           mkdir -p Casks
-          jq -er '.cask' "$TEMP_ROOT/decision.json" > "$TAP_CASK"
+          jq -je '.cask' "$TEMP_ROOT/decision.json" > "$TAP_CASK"
           git add "$TAP_CASK"
           test "$(git diff --cached --name-only)" = "$TAP_CASK"
           git diff --cached --check
