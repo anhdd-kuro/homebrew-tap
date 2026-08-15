@@ -1,6 +1,6 @@
 cask "fixlang" do
-  version "0.31.0"
-  sha256 "93c802cffec6ce41256650c9f23430c865a1e66b1bf3a64495b98efd26e9052b"
+  version "0.32.0"
+  sha256 "8a63b7fefcc93a60cda440b51c4f4515424c0e97e87ac734d82c360d5a578949"
 
   url "https://github.com/anhdd-kuro/fix-lang/releases/download/v#{version}/FixLang-#{version}-arm64.dmg"
   name "FixLang"
