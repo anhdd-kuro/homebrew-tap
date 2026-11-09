@@ -167,6 +167,7 @@ jobs:
           readonly HOMEBREW_TAP_LINK="$(brew --repository)/Library/Taps/anhdd-kuro/homebrew-tap"
           mkdir -p "$(dirname "$HOMEBREW_TAP_LINK")"
           ln -sfn "$GITHUB_WORKSPACE" "$HOMEBREW_TAP_LINK"
+          brew trust anhdd-kuro/tap
           brew style --cask anhdd-kuro/tap/fixlang
           brew audit --cask anhdd-kuro/tap/fixlang
           brew fetch --cask anhdd-kuro/tap/fixlang
@@ -241,6 +242,7 @@ jobs:
 
             tap_added_by_smoke=1
             brew tap anhdd-kuro/tap https://github.com/anhdd-kuro/homebrew-tap || return 1
+            brew trust anhdd-kuro/tap || return 1
             installed_by_smoke=1
             brew install --cask anhdd-kuro/tap/fixlang --appdir "$APP_DIR_REAL" || return 1
             test -d "$APP_DIR_REAL/FixLang.app" || return 1
